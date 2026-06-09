@@ -728,7 +728,7 @@ with st.expander("LM3 Special Vehicle Loading", expanded=False):
                     "Total/m (kN/m)": f"{ln.total_per_m:.2f}",
                 })
             st.markdown("**Secondary lanes (LM1 Lane 2 / 3 / 4 TS + UDL):**")
-            st.dataframe(pd.DataFrame(sec_rows), hide_index=True, use_container_width=True)
+            st.table(pd.DataFrame(sec_rows).set_index("Lane"))
         else:
             st.markdown("*No secondary lanes (only 1 notional lane).*")
 
@@ -787,9 +787,10 @@ with st.expander("LM3 Special Vehicle Loading", expanded=False):
             ax_sv.add_patch(patches.Rectangle((centre - lm1_loading.CONTACT_L/2, 0),
                                               lm1_loading.CONTACT_L, wh_sv,
                                               fc=colour, ec="#333333", lw=0.6, zorder=6))
-            # Dispersion lines
-            ax_sv.plot([fp_l, fp_l], [0, -H_c], color=colour, lw=0.7, ls="--", alpha=0.7, zorder=4)
-            ax_sv.plot([fp_r, fp_r], [0, -H_c], color=colour, lw=0.7, ls="--", alpha=0.7, zorder=4)
+            # Dispersion lines: start at contact-patch edges (GL), spread to crown footprint edges
+            cl = lm1_loading.CONTACT_L
+            ax_sv.plot([centre - cl/2, fp_l], [0, -H_c], color=colour, lw=0.7, ls="--", alpha=0.7, zorder=4)
+            ax_sv.plot([centre + cl/2, fp_r], [0, -H_c], color=colour, lw=0.7, ls="--", alpha=0.7, zorder=4)
 
         # B_ext span arrow
         ax_sv.annotate("", xy=(B_ext, y_bot_sv + 0.05), xytext=(0, y_bot_sv + 0.05),
