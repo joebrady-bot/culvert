@@ -816,6 +816,164 @@ with st.expander("LM3 Special Vehicle Loading", expanded=False):
         st.pyplot(fig_sv, use_container_width=True)
         plt.close()
 
+    # ── LL direction diagram ──────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown(
+        f"**Lane distribution — LL direction** (barrel axis; {lm3.vehicle_name} travels into page)"
+    )
+
+    _lm3_n_disp   = lm3.n_lanes           # total lanes shown (SV + secondary)
+    _lm3_arr_sp   = 0.10 * _lm3_n_disp + 0.18
+    _lm3_y_bot    = -(H_c + _lm3_arr_sp + 0.22)
+    _lm3_cw_x0    = LL / 2 - cw_width / 2
+    _lm3_disp_LL  = lm3.dispersion.disp_LL   # same formula as LM1
+
+    fig_ll3, ax_ll3 = plt.subplots(figsize=(10, 3.8))
+    ax_ll3.set_facecolor("white")
+
+    # Background fill layers
+    ax_ll3.add_patch(patches.Rectangle(
+        (0, _lm3_y_bot), LL, abs(_lm3_y_bot), fc="#C8A86E", ec="none", zorder=0))
+    if t_sub > 0:
+        ax_ll3.add_patch(patches.Rectangle(
+            (0, -(t_road + t_sub)), LL, t_sub, fc="#B0B0B0", ec="none", zorder=1))
+    if t_road > 0:
+        ax_ll3.add_patch(patches.Rectangle(
+            (0, -t_road), LL, t_road, fc="#404040", ec="none", zorder=1))
+
+    # Culvert top slab
+    ax_ll3.add_patch(patches.Rectangle(
+        (0, -H_c), LL, t_s, fc="#BBBBBB", ec="#333333", lw=1.2, zorder=2))
+
+    ax_ll3.axhline(0,    color="#3E1E00", lw=2,   zorder=5)
+    ax_ll3.axhline(-H_c, color="#333333", lw=0.8, ls=":", zorder=3)
+    ax_ll3.text(LL + 0.06, 0.03,      "GL",    color="#3E1E00", fontsize=7, ha="left", va="bottom")
+    ax_ll3.text(LL + 0.06, -H_c+0.02, "Crown", color="#333333", fontsize=6,  ha="left", va="bottom")
+
+    _wh_ll3 = 0.07
+    _lclrs3 = ["#5A8FD0", "#5CA06A", "#C86060", "#9A70C0"]
+
+    # Lane 1 — SV vehicle (i = 0)
+    _sv_axle_kn  = sv.axle_loads[0]
+    _ln1_ctr3    = _lm3_cw_x0 + 0.5 * lane_width
+    _lc1_3       = _lclrs3[0]
+
+    ax_ll3.add_patch(patches.Rectangle(
+        (_lm3_cw_x0, 0), lane_width, 0.11,
+        fc=_lc1_3, ec="white", lw=0.5, alpha=0.75, zorder=4))
+    ax_ll3.text(_ln1_ctr3, 0.055,
+                f"Lane 1 ({lm3.vehicle_name} — {_sv_axle_kn:.0f} kN/axle)",
+                ha="center", va="center", fontsize=5.5, color="white",
+                fontweight="bold", zorder=7)
+    ax_ll3.axvline(_lm3_cw_x0, color="#999999", lw=0.5, ls=":", zorder=3)
+
+    for _wx3 in [_ln1_ctr3 - lm1_loading.WHEEL_SPACING/2,
+                 _ln1_ctr3 + lm1_loading.WHEEL_SPACING/2]:
+        _wx0_3 = _wx3 - lm1_loading.CONTACT_T / 2
+        _wx1_3 = _wx3 + lm1_loading.CONTACT_T / 2
+        ax_ll3.add_patch(patches.Rectangle(
+            (_wx0_3, 0), lm1_loading.CONTACT_T, _wh_ll3,
+            fc="#222222", ec="#111111", lw=0.6, zorder=6))
+        ax_ll3.plot([_wx0_3, _wx0_3 - H_c], [0, -H_c],
+                    color=_lc1_3, lw=0.9, ls="--", alpha=0.80, zorder=5)
+        ax_ll3.plot([_wx1_3, _wx1_3 + H_c], [0, -H_c],
+                    color=_lc1_3, lw=0.9, ls="--", alpha=0.80, zorder=5)
+
+    # Lane 1 dispersion arrow (i = 0, no stagger offset)
+    _y_arr3_1 = -H_c - 0.09
+    ax_ll3.annotate("",
+                    xy=(_ln1_ctr3 + _lm3_disp_LL/2, _y_arr3_1),
+                    xytext=(_ln1_ctr3 - _lm3_disp_LL/2, _y_arr3_1),
+                    arrowprops=dict(arrowstyle="<->", color=_lc1_3, lw=1.0))
+    ax_ll3.text(_ln1_ctr3, _y_arr3_1 - 0.05,
+                f"disp_LL = {_lm3_disp_LL:.2f} m",
+                ha="center", fontsize=5, color=_lc1_3)
+
+    # Secondary lanes (LM1 Lane 2 / 3 / 4) — loop index i starts at 1
+    for _ln3 in lm3.secondary_lanes:
+        _i3    = _ln3.lane - 1   # 0-based (lane 2 → 1, lane 3 → 2, …)
+        _lctr3 = _lm3_cw_x0 + (_i3 + 0.5) * lane_width
+        _lft3  = _lm3_cw_x0 + _i3 * lane_width
+        _lc3   = _lclrs3[_i3 % len(_lclrs3)]
+
+        ax_ll3.add_patch(patches.Rectangle(
+            (_lft3, 0), lane_width, 0.11,
+            fc=_lc3, ec="white", lw=0.5, alpha=0.75, zorder=4))
+        ax_ll3.text(_lctr3, 0.055,
+                    f"Lane {_ln3.lane} (LM1 — {_ln3.Q_ik:.0f} kN/axle)",
+                    ha="center", va="center", fontsize=5.5, color="white",
+                    fontweight="bold", zorder=7)
+        ax_ll3.axvline(_lft3, color="#999999", lw=0.5, ls=":", zorder=3)
+
+        for _wxs in [_lctr3 - lm1_loading.WHEEL_SPACING/2,
+                     _lctr3 + lm1_loading.WHEEL_SPACING/2]:
+            _wx0_s = _wxs - lm1_loading.CONTACT_T / 2
+            _wx1_s = _wxs + lm1_loading.CONTACT_T / 2
+            ax_ll3.add_patch(patches.Rectangle(
+                (_wx0_s, 0), lm1_loading.CONTACT_T, _wh_ll3,
+                fc="#222222", ec="#111111", lw=0.6, zorder=6))
+            ax_ll3.plot([_wx0_s, _wx0_s - H_c], [0, -H_c],
+                        color=_lc3, lw=0.9, ls="--", alpha=0.80, zorder=5)
+            ax_ll3.plot([_wx1_s, _wx1_s + H_c], [0, -H_c],
+                        color=_lc3, lw=0.9, ls="--", alpha=0.80, zorder=5)
+
+        _y_arr3_s = -H_c - 0.09 - _i3 * 0.10
+        ax_ll3.annotate("",
+                        xy=(_lctr3 + _lm3_disp_LL/2, _y_arr3_s),
+                        xytext=(_lctr3 - _lm3_disp_LL/2, _y_arr3_s),
+                        arrowprops=dict(arrowstyle="<->", color=_lc3, lw=1.0))
+        ax_ll3.text(_lctr3, _y_arr3_s - 0.05,
+                    f"disp_LL = {_lm3_disp_LL:.2f} m",
+                    ha="center", fontsize=5, color=_lc3)
+
+    # Right carriageway edge
+    ax_ll3.axvline(_lm3_cw_x0 + cw_width, color="#999999", lw=0.5, ls=":", zorder=3)
+
+    # Wheel spacing annotation — Lane 1
+    ax_ll3.annotate("",
+                    xy  =(_ln1_ctr3 + lm1_loading.WHEEL_SPACING/2, _wh_ll3 + 0.04),
+                    xytext=(_ln1_ctr3 - lm1_loading.WHEEL_SPACING/2, _wh_ll3 + 0.04),
+                    arrowprops=dict(arrowstyle="<->", color="#333333", lw=0.9))
+    ax_ll3.text(_ln1_ctr3, _wh_ll3 + 0.08,
+                f"Wheel spacing = {lm1_loading.WHEEL_SPACING:.1f} m",
+                ha="center", fontsize=5.5, color="#333333")
+
+    # 1m strip indicator — centred on Lane 1
+    ax_ll3.add_patch(patches.Rectangle(
+        (_ln1_ctr3 - 0.5, _lm3_y_bot), 1.0, abs(_lm3_y_bot) + 0.13,
+        fc="none", ec="darkorange", lw=1.3, ls="-", alpha=0.8, zorder=8))
+    ax_ll3.text(_ln1_ctr3, _lm3_y_bot + 0.05,
+                "1 m strip (worst)", ha="center", fontsize=5.5, color="darkorange")
+
+    # H_c depth annotation
+    ax_ll3.annotate("", xy=(-0.3, -H_c), xytext=(-0.3, 0),
+                    arrowprops=dict(arrowstyle="<->", color="black", lw=0.8))
+    ax_ll3.text(-0.35, -H_c/2, f"Hc\n{H_c:.3f} m",
+                fontsize=5.5, va="center", ha="right", linespacing=1.2)
+
+    # Carriageway width annotation
+    ax_ll3.annotate("",
+                    xy  =(_lm3_cw_x0 + cw_width, 0.18),
+                    xytext=(_lm3_cw_x0, 0.18),
+                    arrowprops=dict(arrowstyle="<->", color="#CCCCCC", lw=0.9))
+    ax_ll3.text(LL/2, 0.21,
+                f"Carriageway = {cw_width:.2f} m  ({n_lanes} notional lanes × {lane_width:.2f} m)",
+                ha="center", fontsize=6, color="#CCCCCC")
+
+    # LL span annotation
+    ax_ll3.annotate("", xy=(LL, _lm3_y_bot + 0.07), xytext=(0, _lm3_y_bot + 0.07),
+                    arrowprops=dict(arrowstyle="<->", color="black", lw=0.9))
+    ax_ll3.text(LL/2, _lm3_y_bot + 0.14, f"LL = {LL:.1f} m", ha="center", fontsize=6.5)
+
+    ax_ll3.set_xlim(-0.7, LL + 0.7)
+    ax_ll3.set_ylim(_lm3_y_bot, 0.28)
+    ax_ll3.set_xlabel("LL direction — barrel axis (m)", fontsize=8)
+    ax_ll3.set_ylabel("Depth (m)", fontsize=8)
+    ax_ll3.tick_params(labelsize=7)
+    fig_ll3.tight_layout()
+    st.pyplot(fig_ll3, use_container_width=True)
+    plt.close()
+
 # ══ Section 3: Stability check results ════════════════════════════════════════
 with st.expander("Stability Check Results", expanded=True):
     col_tbl_l, col_tbl_r = st.columns(2)
