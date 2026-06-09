@@ -4,6 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import lm1_loading
+import lm3_loading
 
 st.set_page_config(page_title="Box Culvert Stability", layout="wide")
 
@@ -67,6 +68,10 @@ with st.sidebar:
     lane_width = st.number_input("Lane Width (m)",        1.0, 5.0,  3.65, 0.05, "%.2f", key="lane_width",
                                   help="Individual lane width")
 
+    st.header("LM3 Special Vehicle")
+    st.caption("!! Verify SV data against UK NA Table NA.5 !!")
+    lm3_vehicle = st.selectbox("SV Vehicle", list(lm3_loading.SV_VEHICLES.keys()))
+
     st.header("Water Table")
     h_wt = st.number_input("Depth below GL (m)", 0.0, 30.0, 5.0, 0.1, key="h_wt",
                             help="Shown on diagram. Affects effective stresses and uplift in B.6 checks.")
@@ -124,6 +129,13 @@ lm1 = lm1_loading.compute(
     lane_width=lane_width, n_lanes=n_lanes,
 )
 Q_vk = lm1.max_V_per_m   # characteristic LM1 vertical load (all lanes, per metre strip)
+
+# ── LM3 special vehicle loading ───────────────────────────────────────────────
+lm3 = lm3_loading.compute(
+    vehicle_name=lm3_vehicle,
+    B_ext=B_ext, LL=LL, H_c=H_c,
+    lane_width=lane_width, n_lanes=n_lanes,
+)
 
 # ── PD6694-1 Table 6 — horizontal traffic loads on active wall ────────────────
 # Kd = Ka (characteristic, without γM/γSd;K) per Table 6 Note 4, active side only
@@ -682,6 +694,126 @@ with st.expander("LM1 Vehicle Loading", expanded=True):
     fig_ll.tight_layout()
     st.pyplot(fig_ll, use_container_width=True)
     plt.close()
+
+# ══ Section 2b: LM3 Special Vehicle Loading ═══════════════════════════════════
+with st.expander("LM3 Special Vehicle Loading", expanded=False):
+    sv = lm3_loading.SV_VEHICLES[lm3.vehicle_name]
+    st.warning("SV axle data is **approximate** — verify all values against UK NA Table NA.5 before use in design.")
+
+    col_l3, col_r3 = st.columns([1, 1])
+
+    with col_l3:
+        st.markdown(f"""
+**{lm3.vehicle_name}** — {lm3.gvw:.0f} kN GVW · {len(sv.axle_loads)} axles · {len(sv.axle_loads)} × {sv.axle_loads[0]:.0f} kN/axle
+
+**Per-axle dispersion through {H_c:.3f} m cover (1:1):**
+- LL direction:   {lm3.dispersion.disp_LL:.3f} m &nbsp;=&nbsp; {lm1_loading.WHEEL_SPACING:.1f} + {lm1_loading.CONTACT_T:.1f} + 2×{H_c:.3f}
+- B_ext per axle: {lm3.dispersion.disp_B:.3f} m &nbsp;=&nbsp; {lm1_loading.CONTACT_L:.1f} + 2×{H_c:.3f}
+
+**Worst-case position scan (0.05 m step):**
+- Front-axle offset from culvert edge: **{lm3.sv_worst_offset:+.3f} m**
+- Axles contributing at worst position: **{lm3.sv_n_axles}**
+- SV load (Lane 1) per metre strip: &nbsp;**{lm3.sv_load_per_m:.2f} kN/m**
+""")
+
+        if lm3.secondary_lanes:
+            sec_rows = []
+            for ln in lm3.secondary_lanes:
+                sec_rows.append({
+                    "Lane": f"Lane {ln.lane}",
+                    "Q_ik (kN)":      f"{ln.Q_ik:.0f}",
+                    "q_ik (kN/m²)":   f"{ln.q_ik:.1f}",
+                    "UDL/m (kN/m)":   f"{ln.udl_per_m:.2f}",
+                    "TS/m (kN/m)":    f"{ln.ts_per_m:.2f}",
+                    "Total/m (kN/m)": f"{ln.total_per_m:.2f}",
+                })
+            st.markdown("**Secondary lanes (LM1 Lane 2 / 3 / 4 TS + UDL):**")
+            st.dataframe(pd.DataFrame(sec_rows), hide_index=True, use_container_width=True)
+        else:
+            st.markdown("*No secondary lanes (only 1 notional lane).*")
+
+        st.markdown(f"""
+---
+- LM1 secondary lanes total: &nbsp;**{lm3.secondary_per_m:.2f} kN/m**
+- **Max vertical (SV + secondary): {lm3.max_V_per_m:.2f} kN/m**
+- Min vertical (no LL): **0.00 kN/m**
+""")
+
+    with col_r3:
+        # Diagram: SV vehicle worst-case position in B_ext direction
+        st.markdown(f"**Worst-case axle positions — {lm3.vehicle_name} (B_ext direction)**")
+
+        fig_sv, ax_sv = plt.subplots(figsize=(5, 4))
+        ax_sv.set_facecolor("white")
+
+        pad_sv  = max(B_ext * 0.35, 0.6)
+        x0_sv   = -pad_sv
+        x1_sv   = B_ext + pad_sv
+        y_bot_sv = -(H_c + 0.3)
+
+        # Fill layers
+        ax_sv.add_patch(patches.Rectangle((x0_sv, y_bot_sv), x1_sv - x0_sv, abs(y_bot_sv),
+                                          fc="#C8A86E", ec="none", zorder=0))
+        if t_sub > 0:
+            ax_sv.add_patch(patches.Rectangle((x0_sv, -(t_road + t_sub)), x1_sv - x0_sv, t_sub,
+                                              fc="#B0B0B0", ec="none", zorder=1))
+        if t_road > 0:
+            ax_sv.add_patch(patches.Rectangle((x0_sv, -t_road), x1_sv - x0_sv, t_road,
+                                              fc="#404040", ec="none", zorder=1))
+
+        # Culvert top slab
+        ax_sv.add_patch(patches.Rectangle((0, -H_c), B_ext, t_s,
+                                          fc="#BBBBBB", ec="#333333", lw=1.5, zorder=2))
+
+        # GL and crown
+        ax_sv.axhline(0,    color="#3E1E00", lw=2,   zorder=5)
+        ax_sv.axhline(-H_c, color="#333333", lw=0.8, ls=":", zorder=3)
+        ax_sv.text(x1_sv - 0.05, 0.04,     "GL",    color="#3E1E00", fontsize=7, ha="right", va="bottom")
+        ax_sv.text(x1_sv - 0.05, -H_c+0.02,"Crown", color="#333333", fontsize=6,  ha="right", va="bottom")
+
+        wh_sv = 0.07
+        half_B_sv = lm3.dispersion.disp_B / 2.0
+        offset = lm3.sv_worst_offset
+
+        for ax_pos, ax_load in zip(sv.axle_pos, sv.axle_loads):
+            centre = offset + ax_pos
+            fp_l   = centre - half_B_sv
+            fp_r   = centre + half_B_sv
+            overlap = max(0.0, min(fp_r, B_ext) - max(fp_l, 0.0))
+            on_culvert = overlap > 0.0
+
+            colour = "#CC3300" if on_culvert else "#888888"
+            # Wheel patch at GL level
+            ax_sv.add_patch(patches.Rectangle((centre - lm1_loading.CONTACT_L/2, 0),
+                                              lm1_loading.CONTACT_L, wh_sv,
+                                              fc=colour, ec="#333333", lw=0.6, zorder=6))
+            # Dispersion lines
+            ax_sv.plot([fp_l, fp_l], [0, -H_c], color=colour, lw=0.7, ls="--", alpha=0.7, zorder=4)
+            ax_sv.plot([fp_r, fp_r], [0, -H_c], color=colour, lw=0.7, ls="--", alpha=0.7, zorder=4)
+
+        # B_ext span arrow
+        ax_sv.annotate("", xy=(B_ext, y_bot_sv + 0.05), xytext=(0, y_bot_sv + 0.05),
+                       arrowprops=dict(arrowstyle="<->", color="black", lw=0.9))
+        ax_sv.text(B_ext/2, y_bot_sv + 0.10, f"B_ext={B_ext:.2f}m", ha="center", fontsize=6.5)
+
+        # H_c depth
+        ax_sv.annotate("", xy=(x0_sv + 0.15, -H_c), xytext=(x0_sv + 0.15, 0),
+                       arrowprops=dict(arrowstyle="<->", color="black", lw=0.8))
+        ax_sv.text(x0_sv + 0.22, -H_c/2, f"Hc={H_c:.3f}m", fontsize=6, va="center")
+
+        ax_sv.set_xlim(x0_sv, x1_sv)
+        ax_sv.set_ylim(y_bot_sv, wh_sv + 0.45)
+        ax_sv.set_xlabel("B_ext direction (m)", fontsize=8)
+        ax_sv.set_ylabel("Depth (m)", fontsize=8)
+        ax_sv.tick_params(labelsize=7)
+        ax_sv.set_title(
+            f"{lm3.vehicle_name} worst position (offset={lm3.sv_worst_offset:+.3f} m) — "
+            f"red=contributing, grey=outside",
+            fontsize=6.5, pad=4
+        )
+        fig_sv.tight_layout()
+        st.pyplot(fig_sv, use_container_width=True)
+        plt.close()
 
 # ══ Section 3: Stability check results ════════════════════════════════════════
 with st.expander("Stability Check Results", expanded=True):
