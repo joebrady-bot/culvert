@@ -30,9 +30,9 @@ LS_NAMES = list(LS.keys())
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("Geometry")
-    B   = st.number_input("Internal Width, B (m)",    0.1, 20.0, 2.0,  0.1,  "%.2f")
+    B   = st.number_input("Internal Width, B (m)",    0.1, 20.0, 5.0,  0.1,  "%.2f")
     H   = st.number_input("Internal Height, H (m)",   0.1, 10.0, 1.5,  0.1,  "%.2f")
-    LL  = st.number_input("Overall Length, LL (m)",   0.5, 50.0, 6.0,  0.5,  "%.1f",
+    LL  = st.number_input("Overall Length, LL (m)",   0.5, 50.0, 20.0, 0.5,  "%.1f",
                            help="Longitudinal barrel length — used for load dispersion and braking reduction factor η.")
     t_w = st.number_input("Wall Thickness, t_w (m)",  0.05, 2.0, 0.25, 0.05, "%.2f")
     t_s = st.number_input("Slab Thickness, t_s (m)",  0.05, 2.0, 0.30, 0.05, "%.2f")
@@ -63,9 +63,9 @@ with st.sidebar:
 
     st.header("Road Geometry")
     st.caption("Road runs transversely across the culvert (vehicles travel in B_ext direction)")
-    cw_width   = st.number_input("Carriageway Width (m)", 1.0, 30.0, 7.30, 0.05, "%.2f", key="cw_width",
+    cw_width   = st.number_input("Carriageway Width (m)", 1.0, 30.0, 6.00, 0.05, "%.2f", key="cw_width",
                                   help="Total width between kerbs, centred on barrel length LL")
-    lane_width = st.number_input("Lane Width (m)",        1.0, 5.0,  3.65, 0.05, "%.2f", key="lane_width",
+    lane_width = st.number_input("Lane Width (m)",        1.0, 5.0,  3.00, 0.05, "%.2f", key="lane_width",
                                   help="Individual lane width")
 
     st.header("LM3 Special Vehicle")
@@ -153,7 +153,7 @@ Q_h_F_k   = 2.0 * 300.0 * Ka_char * _rF / lane_width      # two F line loads (kN
 Q_h_M_k   = Q_h_udl_k * (H_ext / 2.0) + Q_h_F_k * H_ext  # driving moment (kNm/m)
 
 # ── Per-limit-state calculations ───────────────────────────────────────────────
-def run(p, Q_vk):
+def run(p, Q_vk, Q_h_F_k_arg):
     Ka, Kmax   = p["Ka"],   p["Kmax"]
     gG_u, gG_f = p["gG_u"], p["gG_f"]
     gQ         = p["gQ"]
@@ -180,8 +180,10 @@ def run(p, Q_vk):
     M_stb    = V_f * B_ext / 2
 
     # Table 6 horizontal traffic loads — active side, factored by γQ
-    F_h_tr   = gQ * (Q_h_udl_k + Q_h_F_k)   # factored horizontal force (kN/m)
-    M_h_tr   = gQ * Q_h_M_k                   # factored driving moment (kNm/m)
+    # Q_h_F_k_arg: LM1 → Table 6 F line loads; LM3 → SV braking (0.25×GVW×r_F/lane_width)
+    F_h_tr       = gQ * (Q_h_udl_k + Q_h_F_k_arg)
+    Q_h_M_k_char = Q_h_udl_k * (H_ext / 2.0) + Q_h_F_k_arg * H_ext
+    M_h_tr       = gQ * Q_h_M_k_char
 
     # B.4/B.5 OT and sliding include Table 6 traffic horizontal on active side
     F_drv_B45  = F_net    + F_h_tr
@@ -226,7 +228,7 @@ def run(p, Q_vk):
         F_Ka=F_Ka, F_Ka_B6=F_Ka_B6, F_Kmax=F_Kmax, F_net=F_net,
         arm_Ka=arm_Ka, arm_Ka_B6=arm_Ka_B6, arm_Kmax=arm_Kmax, arm_Kr=arm_Kr,
         Kp=Kp, F_Kr=F_Kr, R_fric=R_fric, R_fric_B6=R_fric_B6, R_B6=R_B6,
-        F_h_tr=F_h_tr, M_h_tr=M_h_tr,
+        F_h_tr=F_h_tr, M_h_tr=M_h_tr, Q_h_M_k_char=Q_h_M_k_char,
         F_drv_B45=F_drv_B45, M_drv_B45=M_drv_B45,
         F_drv_B6=F_drv_B6, M_Ka_B6=M_Ka_B6,
         q_B4=q_B4, q_B5=q_B5, q_B6=q_B6,
@@ -238,8 +240,8 @@ def run(p, Q_vk):
 
 Q_vk_lm3 = lm3.max_V_per_m
 
-res_lm1 = {n: run(LS[n], Q_vk_lm1) for n in LS_NAMES}
-res_lm3 = {n: run(LS[n], Q_vk_lm3) for n in LS_NAMES}
+res_lm1 = {n: run(LS[n], Q_vk_lm1, Q_h_F_k)                  for n in LS_NAMES}
+res_lm3 = {n: run(LS[n], Q_vk_lm3, lm3.braking.Q_brk_per_m) for n in LS_NAMES}
 
 # ── Shared drawing helper ──────────────────────────────────────────────────────
 def dim_arrow(ax, x, y0, y1, label, side="r", fontsize=6.5):
@@ -735,7 +737,14 @@ with st.expander("LM3 Special Vehicle Loading", expanded=False):
         else:
             st.markdown("*No secondary lanes (only 1 notional lane).*")
 
+        brk = lm3.braking
         st.markdown(f"""
+**Braking force — BS EN 1991-2 Cl. 4.4.4:**
+- Q_brk = 0.25 × {lm3.gvw:.0f} kN = **{brk.Q_brk_raw:.1f} kN**
+- Note 5 r_F (Hc={H_c:.3f} m): **{brk.r_F:.4f}** {"(Hc≥2m — braking=0)" if H_c >= 2.0 else ""}
+- Q_brk,reduced = {brk.Q_brk_raw:.1f} × {brk.r_F:.4f} = **{brk.Q_brk_reduced:.1f} kN**
+- Per metre strip (÷ {lane_width:.2f} m): **{brk.Q_brk_per_m:.2f} kN/m** (applied at crown, arm = H_ext)
+
 ---
 - LM1 secondary lanes total: &nbsp;**{lm3.secondary_per_m:.2f} kN/m**
 - **Max vertical (SV + secondary): {lm3.max_V_per_m:.2f} kN/m**
@@ -1053,12 +1062,19 @@ for tab, name in zip(tabs, LS_NAMES):
             f"LM1  ({Q_vk_lm1:.1f} kN/m)",
             f"LM3 {lm3.vehicle_name}  ({Q_vk_lm3:.1f} kN/m)",
         ])
-        for _dc_tab, (_dc_Qvk, _dc_res, _dc_label) in zip(
+        for _dc_tab, (_dc_Qvk, _dc_res, _dc_label, _dc_F_k) in zip(
             _dc_subtabs,
-            [(Q_vk_lm1, res_lm1, "LM1 — all lanes"),
-             (Q_vk_lm3, res_lm3, f"LM3 {lm3.vehicle_name} + secondary lanes")],
+            [(Q_vk_lm1, res_lm1, "LM1 — all lanes",                            Q_h_F_k),
+             (Q_vk_lm3, res_lm3, f"LM3 {lm3.vehicle_name} + secondary lanes", lm3.braking.Q_brk_per_m)],
         ):
             r = _dc_res[name]
+            _dc_is_lm1    = _dc_label.startswith("LM1")
+            _dc_F_formula = (
+                f"2×300×{Ka_char:.4f}×{_rF:.4f}/{lane_width:.2f}"
+                if _dc_is_lm1
+                else f"0.25×{lm3.gvw:.0f}kN×{lm3.braking.r_F:.4f}/{lane_width:.2f}"
+            )
+            _dc_F_desc = "F_line (Table 6)" if _dc_is_lm1 else f"SV braking (0.25×GVW, Note 5)"
             with _dc_tab:
                 st.markdown(f"""
 **Limit state parameters** · Ka = {r['Ka']} · Kmax = {r['Kmax']} · γG_u = {r['gG_u']:.2f} · γG_f = {r['gG_f']:.2f} · γQ = {r['gQ']:.2f} · γφ = {r['g_phi']:.2f}
@@ -1075,13 +1091,13 @@ for tab, name in zip(tabs, LS_NAMES):
 - F_Kmax = ½ × {r['Kmax']} × ({σ_top:.2f}+{σ_bot:.2f}) × {H_ext:.3f} = **{r['F_Kmax']:.2f} kN/m** (restrained)
 - F_net (earth only) = {r['F_Kmax']:.2f} − {r['F_Ka']:.2f} = **{r['F_net']:.2f} kN/m**
 
-**Table 6 horizontal traffic — active side (PD6694-1)**
+**Horizontal traffic — active side (PD6694-1 Table 6)**
 - Ka_char = tan²(45−{φ_fill_deg:.1f}°/2) = **{Ka_char:.4f}**
 - σh = 20 × {Ka_char:.4f} × {H_ext:.3f} m = **{Q_h_udl_k:.2f} kN/m** (arm {H_ext/2:.3f} m)
-- F reduction (Note 5, Hc={H_c:.3f} m): r_F = **{_rF:.4f}** {"(Hc≥2m — F=0)" if H_c >= 2.0 else ""}
-- F_line = 2×300×{Ka_char:.4f}×{_rF:.4f}/{lane_width:.2f} = **{Q_h_F_k:.2f} kN/m** (arm {H_ext:.3f} m)
-- γQ × (σh + F_line) = {r['gQ']:.2f} × ({Q_h_udl_k:.2f}+{Q_h_F_k:.2f}) = **{r['F_h_tr']:.2f} kN/m** (factored)
-- γQ × M_h = {r['gQ']:.2f} × {Q_h_M_k:.2f} = **{r['M_h_tr']:.2f} kNm/m** (factored driving moment)
+- Note 5 r_F (Hc={H_c:.3f} m): **{_rF:.4f}** {"(Hc≥2m — F=0)" if H_c >= 2.0 else ""}
+- {_dc_F_desc} = {_dc_F_formula} = **{_dc_F_k:.2f} kN/m** (arm {H_ext:.3f} m)
+- γQ × (σh + F) = {r['gQ']:.2f} × ({Q_h_udl_k:.2f}+{_dc_F_k:.2f}) = **{r['F_h_tr']:.2f} kN/m** (factored)
+- γQ × M_h = {r['gQ']:.2f} × {r['Q_h_M_k_char']:.2f} = **{r['M_h_tr']:.2f} kNm/m** (factored driving moment)
 """)
 
                 c1, c2, c3 = st.columns(3)

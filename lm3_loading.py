@@ -90,6 +90,20 @@ class SVDispersionGeometry:
 
 
 @dataclass
+class LM3BrakingResult:
+    """
+    Horizontal braking/acceleration force for an SV vehicle.
+    BS EN 1991-2 Cl. 4.4.4 — 25 % of GVW.
+    Reduced by PD6694-1 Table 6 Note 5 for buried structures (same factor as F line loads).
+    Applied at crown level; arm = H_ext from base.
+    """
+    Q_brk_raw:     float   # 0.25 × GVW (kN) — before Note 5
+    r_F:           float   # Note 5 reduction factor
+    Q_brk_reduced: float   # after Note 5 (kN)
+    Q_brk_per_m:   float   # per metre strip in LL direction (kN/m) — ÷ lane_width
+
+
+@dataclass
 class LM3Result:
     vehicle_name:       str
     gvw:                float
@@ -102,10 +116,11 @@ class LM3Result:
     sv_load_per_m:      float   # SV contribution per metre strip (kN/m)
     sv_worst_offset:    float   # front-axle offset from culvert leading edge (m)
     sv_n_axles:         int     # number of SV axles contributing at worst position
-    secondary_lanes:    List[LaneResult]   # LM1 Lanes 2, 3, 4
-    secondary_per_m:    float   # LM1 secondary-lane total per metre strip (kN/m)
-    max_V_per_m:        float   # SV + secondary lanes (kN/m)
-    min_V_per_m:        float   # = 0
+    secondary_lanes:    List[LaneResult]    # LM1 Lanes 2, 3, 4
+    secondary_per_m:    float              # LM1 secondary-lane total per metre strip (kN/m)
+    braking:            LM3BrakingResult   # SV horizontal braking force
+    max_V_per_m:        float              # SV + secondary lanes (kN/m)
+    min_V_per_m:        float              # = 0
 
 
 # ── Core helpers ──────────────────────────────────────────────────────────────
@@ -230,6 +245,19 @@ def compute(
 
     max_V = sv_load + sec_total
 
+    # ── SV braking — BS EN 1991-2 Cl. 4.4.4 ─────────────────────────────────
+    _rF         = (1.0 - H_c / 2.0) ** 2 if H_c < 2.0 else 0.0
+    Q_brk_raw   = 0.25 * sv.gvw           # 25 % of GVW
+    Q_brk_red   = Q_brk_raw * _rF         # Note 5 reduction
+    Q_brk_per_m = Q_brk_red / lane_width  # per metre strip in LL direction
+
+    braking = LM3BrakingResult(
+        Q_brk_raw=Q_brk_raw,
+        r_F=_rF,
+        Q_brk_reduced=Q_brk_red,
+        Q_brk_per_m=Q_brk_per_m,
+    )
+
     return LM3Result(
         vehicle_name=vehicle_name,
         gvw=sv.gvw,
@@ -244,6 +272,7 @@ def compute(
         sv_n_axles=sv_n,
         secondary_lanes=secondary,
         secondary_per_m=sec_total,
+        braking=braking,
         max_V_per_m=max_V,
         min_V_per_m=0.0,
     )
@@ -287,10 +316,16 @@ def summary(r: LM3Result) -> str:
         lines.append(f"  LM1 secondary lanes total:  {r.secondary_per_m:.2f} kN/m")
     else:
         lines.append("  No secondary lanes (1 lane total).")
+    brk = r.braking
     lines += [
         "=" * 70,
         f"  Max vertical per metre strip (SV + secondary): {r.max_V_per_m:>8.2f} kN/m",
         f"  Min vertical per metre strip (no LL):          {r.min_V_per_m:>8.2f} kN/m",
+        "=" * 70,
+        "Braking / acceleration force (BS EN 1991-2 Cl. 4.4.4):",
+        f"  Q_brk = 0.25 × {r.gvw:.0f} kN GVW = {brk.Q_brk_raw:.1f} kN",
+        f"  Note 5 r_F = {brk.r_F:.4f}  →  Q_brk,reduced = {brk.Q_brk_reduced:.1f} kN",
+        f"  Per metre strip (÷ lane width {r.lane_width:.2f} m): {brk.Q_brk_per_m:.2f} kN/m",
         "=" * 70,
     ]
     return "\n".join(lines)
