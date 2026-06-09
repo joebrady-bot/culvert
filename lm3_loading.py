@@ -11,7 +11,7 @@ Conventions
 - Metre-strip analysis: 1 m strip in LL direction (along barrel axis).
 - SV occupies Lane 1; remaining lanes carry LM1 Lane 2 / 3 / 4 TS + UDL.
 - Worst-case SV position found by scanning B_ext offsets (0.05 m step).
-- 1:1 load dispersion through cover depth H_c (same as LM1).
+- 30° load dispersion through cover depth H_c per PD6694-1 Figure 11 (same as LM1).
 
 References
 ----------
@@ -27,9 +27,14 @@ from typing import List, Tuple
 import lm1_loading
 from lm1_loading import (
     LM1_CHAR, ALPHA_Q, ALPHA_q,
-    WHEEL_SPACING, CONTACT_L, CONTACT_T, DISP,
+    DISP,
     LaneResult, DispersionGeometry,
 )
+
+# ── SV geometry constants (UK NA Table NA.5 / worked example) ────────────────
+SV_CONTACT_L     = 0.35   # m — wheel contact patch in B_ext direction
+SV_CONTACT_T     = 0.35   # m — wheel contact patch in LL direction
+SV_WHEEL_SPACING = 2.65   # m — wheel centre-to-centre in LL direction
 
 
 # ── SV Vehicle definitions ────────────────────────────────────────────────────
@@ -68,13 +73,18 @@ SV_VEHICLES: dict = {
         ],
     ),
     "SV196": SVVehicle(
-        name="SV196", gvw=1960.0,
-        axle_loads=[140.0] * 14,
-        # 7 paired groups at 140 kN/axle
-        axle_pos=[
-            0.0,  1.5,  6.5,  8.0, 13.0, 14.5, 19.5,
-            21.0, 26.0, 27.5, 32.0, 33.5, 38.0, 39.5,
-        ],
+        name="SV196",
+        # gvw = sum of BASIC (unfactored) axle loads — used for braking Q = 0.25 × GVW
+        # 100 + 2×180 + 9×165 = 1945 kN  →  0.25 × 1945 = 486 kN braking
+        gvw=1945.0,
+        # DAF-factored axle loads (UK NA / worked example D. Childs):
+        #   Steer (×1): 100 kN × DAF 1.20 = 120.0 kN
+        #   Drive (×2): 180 kN × DAF 1.10 = 198.0 kN
+        #   Trailer(×9): 165 kN × DAF 1.12 = 184.8 kN
+        axle_loads=[120.0, 198.0, 198.0] + [184.8] * 9,
+        # Approximate axle positions (m from steer axle) — verify against UK NA Table NA.5
+        # Steer | Drive bogie | king-pin gap | 9 trailer axles at 1.2 m spacing
+        axle_pos=[0.0, 3.5, 5.0, 8.0, 9.2, 10.4, 11.6, 12.8, 14.0, 15.2, 16.4, 17.6],
     ),
 }
 
@@ -93,14 +103,13 @@ class SVDispersionGeometry:
 class LM3BrakingResult:
     """
     Horizontal braking/acceleration force for an SV vehicle.
-    BS EN 1991-2 Cl. 4.4.4 — 25 % of GVW.
-    Reduced by PD6694-1 Table 6 Note 5 for buried structures (same factor as F line loads).
+    BS EN 1991-2 Cl. 4.4.4: Q_brk = 0.25 × basic GVW (unfactored axle loads).
+    For in-situ box structures, distributed over barrel length LL via in-plane rigidity
+    (PD6694-1 Cl. 10.2.8.2).
     Applied at crown level; arm = H_ext from base.
     """
-    Q_brk_raw:     float   # 0.25 × GVW (kN) — before Note 5
-    r_F:           float   # Note 5 reduction factor
-    Q_brk_reduced: float   # after Note 5 (kN)
-    Q_brk_per_m:   float   # per metre strip in LL direction (kN/m) — ÷ lane_width
+    Q_brk_raw:     float   # 0.25 × basic GVW (kN)
+    Q_brk_per_m:   float   # per metre strip in LL direction (kN/m) — ÷ LL
 
 
 @dataclass
@@ -129,15 +138,25 @@ def _dispersion(H_c: float) -> SVDispersionGeometry:
     """
     Per-axle dispersed footprint at crown level.
 
-    LL direction (wheels side-by-side, same as LM1 tandem):
-        disp_LL = WHEEL_SPACING + CONTACT_T + 2 * H_c
+    B_ext direction (one axle):
+        disp_B = SV_CONTACT_L + 2 * DISP * H_c
 
-    B_ext direction (single axle, no tandem spacing):
-        disp_B = CONTACT_L + 2 * H_c
+    LL direction — SV wheels are 2.65 m apart; each wheel disperses independently.
+    When the dispersed patches of adjacent wheels don't overlap (gap >= 0), the worst
+    1m strip is under one wheel only:
+        load/m = (axle_load/2) / disp_LL_single   [one wheel per strip]
+    Encoding this as ax_load / disp_LL by setting disp_LL = 2 × disp_LL_single.
+    When patches overlap (gap < 0) they merge:
+        disp_LL = SV_WHEEL_SPACING + disp_LL_single
     """
-    spread  = DISP * H_c
-    disp_LL = WHEEL_SPACING + CONTACT_T + 2 * spread
-    disp_B  = CONTACT_L               + 2 * spread
+    spread         = DISP * H_c
+    disp_LL_single = SV_CONTACT_T + 2 * spread              # one wheel's LL dispersal
+    gap_LL         = SV_WHEEL_SPACING - disp_LL_single       # > 0 → patches separate
+    if gap_LL >= 0:
+        disp_LL = 2 * disp_LL_single                         # non-overlapping: per-wheel
+    else:
+        disp_LL = SV_WHEEL_SPACING + disp_LL_single          # merged: both wheels
+    disp_B = SV_CONTACT_L + 2 * spread
     return SVDispersionGeometry(H_c=H_c, disp_LL=disp_LL, disp_B=disp_B)
 
 
@@ -245,16 +264,13 @@ def compute(
 
     max_V = sv_load + sec_total
 
-    # ── SV braking — BS EN 1991-2 Cl. 4.4.4 ─────────────────────────────────
-    _rF         = (1.0 - H_c / 2.0) ** 2 if H_c < 2.0 else 0.0
-    Q_brk_raw   = 0.25 * sv.gvw           # 25 % of GVW
-    Q_brk_red   = Q_brk_raw * _rF         # Note 5 reduction
-    Q_brk_per_m = Q_brk_red / lane_width  # per metre strip in LL direction
+    # ── SV braking — BS EN 1991-2 Cl. 4.4.4 / PD6694-1 Cl. 10.2.8.2 ──────────
+    # 25% of basic (unfactored) GVW, distributed over barrel length via in-plane rigidity.
+    Q_brk_raw   = 0.25 * sv.gvw   # 25% of basic GVW (e.g. 0.25×1945 = 486 kN for SV196)
+    Q_brk_per_m = Q_brk_raw / LL  # distribute over barrel length Lj = LL
 
     braking = LM3BrakingResult(
         Q_brk_raw=Q_brk_raw,
-        r_F=_rF,
-        Q_brk_reduced=Q_brk_red,
         Q_brk_per_m=Q_brk_per_m,
     )
 
@@ -291,9 +307,9 @@ def summary(r: LM3Result) -> str:
         "-" * 70,
         "!! SV axle data is approximate — verify against UK NA Table NA.5 !!",
         "-" * 70,
-        "Per-axle dispersion (1:1 through fill):",
-        f"  LL direction  : {WHEEL_SPACING:.1f} + {CONTACT_T:.1f} + 2×{dg.H_c:.3f} = {dg.disp_LL:.3f} m",
-        f"  B_ext per axle: {CONTACT_L:.1f} + 2×{dg.H_c:.3f} = {dg.disp_B:.3f} m",
+        f"Per-axle dispersion (30°, tan30°={DISP:.4f}) at crown (contact patch {SV_CONTACT_L*1000:.0f}×{SV_CONTACT_T*1000:.0f}mm, wheel spacing {SV_WHEEL_SPACING:.2f}m):",
+        f"  LL per wheel  : {SV_CONTACT_T:.3f} + 2x{DISP:.4f}x{dg.H_c:.3f} = {SV_CONTACT_T + 2*DISP*dg.H_c:.3f} m  -> disp_LL = 2x = {dg.disp_LL:.3f} m",
+        f"  B_ext per axle: {SV_CONTACT_L:.3f} + 2×{DISP:.4f}×{dg.H_c:.3f} = {dg.disp_B:.3f} m",
         "-" * 70,
         f"SV vehicle (Lane 1):",
         f"  Worst offset (front axle from culvert edge): {r.sv_worst_offset:+.3f} m",
@@ -322,10 +338,10 @@ def summary(r: LM3Result) -> str:
         f"  Max vertical per metre strip (SV + secondary): {r.max_V_per_m:>8.2f} kN/m",
         f"  Min vertical per metre strip (no LL):          {r.min_V_per_m:>8.2f} kN/m",
         "=" * 70,
-        "Braking / acceleration force (BS EN 1991-2 Cl. 4.4.4):",
-        f"  Q_brk = 0.25 × {r.gvw:.0f} kN GVW = {brk.Q_brk_raw:.1f} kN",
-        f"  Note 5 r_F = {brk.r_F:.4f}  →  Q_brk,reduced = {brk.Q_brk_reduced:.1f} kN",
-        f"  Per metre strip (÷ lane width {r.lane_width:.2f} m): {brk.Q_brk_per_m:.2f} kN/m",
+        "Braking / acceleration force (BS EN 1991-2 Cl. 4.4.4 / PD6694-1 Cl. 10.2.8.2):",
+        f"  Q_brk = 0.25 × {r.gvw:.0f} kN basic GVW = {brk.Q_brk_raw:.1f} kN",
+        f"  Distributed over barrel length LL = {r.LL:.2f} m (in-plane rigidity)",
+        f"  Per metre strip: {brk.Q_brk_per_m:.2f} kN/m",
         "=" * 70,
     ]
     return "\n".join(lines)

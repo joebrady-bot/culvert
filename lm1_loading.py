@@ -37,8 +37,8 @@ WHEEL_SPACING = 2.0   # m  wheel centre to wheel centre (transverse / LL directi
 CONTACT_L     = 0.4   # m  wheel contact patch in travel direction
 CONTACT_T     = 0.4   # m  wheel contact patch in transverse direction
 
-# Load dispersion through fill — 1 horizontal : 1 vertical (45°)
-DISP = 1.0
+# Load dispersion through fill — 30° to vertical (tan30° ≈ 0.577) per PD6694-1 Figure 11
+DISP = math.tan(math.pi / 6)
 
 
 # ── Data classes ──────────────────────────────────────────────────────────────
@@ -220,9 +220,9 @@ def summary(r: LM1Result) -> str:
         "=" * 70,
         f"LM1 Loading — {r.n_lanes} lane(s)  |  B_ext={r.B_ext:.2f}m  LL={r.LL:.2f}m  Hc={r.H_c:.3f}m",
         "-" * 70,
-        f"Dispersion (1:1) at crown:",
-        f"  LL direction  : {WHEEL_SPACING:.1f} + {CONTACT_T:.1f} + 2×{DISP}×{r.H_c:.3f} = {dg.disp_LL:.3f} m",
-        f"  B_ext direction: {AXLE_SPACING:.1f} + {CONTACT_L:.1f} + 2×{DISP}×{r.H_c:.3f} = {dg.disp_Bext:.3f} m  [{merged_str}]",
+        f"Dispersion (30°, tan30°={DISP:.4f}) at crown:",
+        f"  LL direction  : {WHEEL_SPACING:.1f} + {CONTACT_T:.1f} + 2×{DISP:.4f}×{r.H_c:.3f} = {dg.disp_LL:.3f} m",
+        f"  B_ext direction: {AXLE_SPACING:.1f} + {CONTACT_L:.1f} + 2×{DISP:.4f}×{r.H_c:.3f} = {dg.disp_Bext:.3f} m  [{merged_str}]",
         f"  Effective loaded length in B_ext: min({dg.disp_Bext:.3f}, {r.B_ext:.2f}) = {dg.Bext_loaded:.3f} m",
         "-" * 70,
         f"{'Lane':<6}{'Q_ik (kN)':<12}{'q_ik (kN/m²)':<15}{'UDL/m (kN/m)':<15}{'TS/m (kN/m)':<14}{'Total/m (kN/m)':<14}",
