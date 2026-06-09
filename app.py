@@ -128,7 +128,7 @@ lm1 = lm1_loading.compute(
     B_ext=B_ext, LL=LL, H_c=H_c,
     lane_width=lane_width, n_lanes=n_lanes,
 )
-Q_vk = lm1.max_V_per_m   # characteristic LM1 vertical load (all lanes, per metre strip)
+Q_vk_lm1 = lm1.max_V_per_m   # characteristic LM1 vertical load (all lanes, per metre strip)
 
 # ── LM3 special vehicle loading ───────────────────────────────────────────────
 lm3 = lm3_loading.compute(
@@ -153,7 +153,7 @@ Q_h_F_k   = 2.0 * 300.0 * Ka_char * _rF / lane_width      # two F line loads (kN
 Q_h_M_k   = Q_h_udl_k * (H_ext / 2.0) + Q_h_F_k * H_ext  # driving moment (kNm/m)
 
 # ── Per-limit-state calculations ───────────────────────────────────────────────
-def run(p):
+def run(p, Q_vk):
     Ka, Kmax   = p["Ka"],   p["Kmax"]
     gG_u, gG_f = p["gG_u"], p["gG_f"]
     gQ         = p["gQ"]
@@ -236,7 +236,10 @@ def run(p):
         UR_B6_bear=UR_B6_bear, UR_B6_ov=UR_B6_ov, UR_B6_sl=UR_B6_sl,
     )
 
-res = {n: run(LS[n]) for n in LS_NAMES}
+Q_vk_lm3 = lm3.max_V_per_m
+
+res_lm1 = {n: run(LS[n], Q_vk_lm1) for n in LS_NAMES}
+res_lm3 = {n: run(LS[n], Q_vk_lm3) for n in LS_NAMES}
 
 # ── Shared drawing helper ──────────────────────────────────────────────────────
 def dim_arrow(ax, x, y0, y1, label, side="r", fontsize=6.5):
@@ -1009,46 +1012,63 @@ with col_tbl_r:
         ("Overturning",         "B.6 (Gk)",      "UR_B6_ov"),
         ("Sliding (fric+Kr)",   "B.6 (Gk)",      "UR_B6_sl"),
     ]
-    summary_data = {
-        "Check":     [r[0] for r in rows],
-        "Case":      [r[1] for r in rows],
-        **{n: [fmt(res[n][r[2]]) for r in rows] for n in LS_NAMES},
-    }
-    st.dataframe(pd.DataFrame(summary_data), hide_index=True, use_container_width=True)
+    _ur_tabs = st.tabs([
+        f"LM1  ({Q_vk_lm1:.1f} kN/m)",
+        f"LM3 {lm3.vehicle_name}  ({Q_vk_lm3:.1f} kN/m)",
+    ])
+    for _ur_tab, _ur_res in zip(_ur_tabs, [res_lm1, res_lm3]):
+        with _ur_tab:
+            summary_data = {
+                "Check": [row[0] for row in rows],
+                "Case":  [row[1] for row in rows],
+                **{n: [fmt(_ur_res[n][row[2]]) for row in rows] for n in LS_NAMES},
+            }
+            st.dataframe(pd.DataFrame(summary_data), hide_index=True, use_container_width=True)
 
-    # Overall verdict
+    # Overall verdict — worst of LM1 and LM3 across all limit states
     all_keys = ("UR_B4_bear", "UR_B4_ov", "UR_B4_sl",
                 "UR_B5_bear", "UR_B6_bear", "UR_B6_ov", "UR_B6_sl")
-    all_urs = [res[n][k] for n in LS_NAMES for k in all_keys]
+    all_urs = [_r[n][k] for _r in [res_lm1, res_lm3] for n in LS_NAMES for k in all_keys]
     if all(u <= 1.0 for u in all_urs if u < 1e6):
-        st.success("**PASS** — All checks satisfied across all four limit states.")
+        st.success("**PASS** — All checks satisfied (LM1 and LM3) across all four limit states.")
     else:
         fails = []
         check_map = [("Bearing B.4",    "UR_B4_bear"), ("Overturning B.4/B.5", "UR_B4_ov"),
                      ("Sliding B.4/B.5","UR_B4_sl"),   ("Bearing B.5",         "UR_B5_bear"),
                      ("Bearing B.6",    "UR_B6_bear"), ("Overturning B.6",     "UR_B6_ov"),
-                     ("Sliding B.6",   "UR_B6_sl")]
-        for n in LS_NAMES:
-            for label, key in check_map:
-                if res[n][key] > 1.0:
-                    fails.append(f"{label} [{n}]")
+                     ("Sliding B.6",    "UR_B6_sl")]
+        for _lm_label, _r in [("LM1", res_lm1), (f"LM3 {lm3.vehicle_name}", res_lm3)]:
+            for n in LS_NAMES:
+                for label, key in check_map:
+                    if _r[n][key] > 1.0:
+                        fails.append(f"{label} [{n}] ({_lm_label})")
         st.error("**FAIL** — " + " · ".join(fails))
 
 # ══ Section 4: Detailed calculations ══════════════════════════════════════════
 with st.expander("Detailed Calculations", expanded=False):
     tabs = st.tabs(LS_NAMES)
 for tab, name in zip(tabs, LS_NAMES):
-    r = res[name]
     with tab:
-        st.markdown(f"""
+        _dc_subtabs = st.tabs([
+            f"LM1  ({Q_vk_lm1:.1f} kN/m)",
+            f"LM3 {lm3.vehicle_name}  ({Q_vk_lm3:.1f} kN/m)",
+        ])
+        for _dc_tab, (_dc_Qvk, _dc_res, _dc_label) in zip(
+            _dc_subtabs,
+            [(Q_vk_lm1, res_lm1, "LM1 — all lanes"),
+             (Q_vk_lm3, res_lm3, f"LM3 {lm3.vehicle_name} + secondary lanes")],
+        ):
+            r = _dc_res[name]
+            with _dc_tab:
+                st.markdown(f"""
 **Limit state parameters** · Ka = {r['Ka']} · Kmax = {r['Kmax']} · γG_u = {r['gG_u']:.2f} · γG_f = {r['gG_f']:.2f} · γQ = {r['gQ']:.2f} · γφ = {r['g_phi']:.2f}
 
 **Characteristic vertical loads**
-- N_G,k (permanent) = {N_G_k:.2f} kN/m &nbsp;·&nbsp; Q_v,k (LM1 traffic, all lanes) = {Q_vk:.2f} kN/m
+- N_G,k (permanent) = {N_G_k:.2f} kN/m &nbsp;·&nbsp; Q_v,k ({_dc_label}) = {_dc_Qvk:.2f} kN/m
 
 **Factored vertical loads**
-- V_u (B.4 bearing, max) = {r['gG_u']:.2f}×{N_G_k:.2f} + {r['gQ']:.2f}×{Q_vk:.2f} = **{r['V_u']:.2f} kN/m**
-- V_f (B.5 resist., min) = {r['gG_f']:.2f}×{N_G_k:.2f} + 0×{Q_vk:.2f} &nbsp;= **{r['V_f']:.2f} kN/m** *(traffic excluded — variable action not favourable)*
+- V_u (B.4 bearing, max) = {r['gG_u']:.2f}×{N_G_k:.2f} + {r['gQ']:.2f}×{_dc_Qvk:.2f} = **{r['V_u']:.2f} kN/m**
+- V_f (B.5 resist., min) = {r['gG_f']:.2f}×{N_G_k:.2f} + 0×{_dc_Qvk:.2f} &nbsp;= **{r['V_f']:.2f} kN/m** *(traffic excluded — variable action not favourable)*
 
 **Horizontal earth pressure** (σ_top = {σ_top:.2f} kPa · σ_bot = {σ_bot:.2f} kPa)
 - F_Ka   = ½ × {r['Ka']} × ({σ_top:.2f}+{σ_bot:.2f}) × {H_ext:.3f} = **{r['F_Ka']:.2f} kN/m** (active)
@@ -1064,14 +1084,14 @@ for tab, name in zip(tabs, LS_NAMES):
 - γQ × M_h = {r['gQ']:.2f} × {Q_h_M_k:.2f} = **{r['M_h_tr']:.2f} kNm/m** (factored driving moment)
 """)
 
-        c1, c2, c3 = st.columns(3)
+                c1, c2, c3 = st.columns(3)
 
-        with c1:
-            st.markdown(f"""
+                with c1:
+                    st.markdown(f"""
 **Table B.4 — Max vertical (Gk + Qk)**
 
 *Bearing*
-- V_u = {r['gG_u']:.2f}×{N_G_k:.2f} + {r['gQ']:.2f}×{Q_vk:.2f} = **{r['V_u']:.2f} kN/m**
+- V_u = {r['gG_u']:.2f}×{N_G_k:.2f} + {r['gQ']:.2f}×{_dc_Qvk:.2f} = **{r['V_u']:.2f} kN/m**
 - q = V_u/B_ext = {r['V_u']:.2f}/{B_ext:.3f} = **{r['q_B4']:.2f} kPa**
 - q_Rd = {q_Rd:.1f} kPa → **UR = {r['UR_B4_bear']:.3f}** {"✅" if r["UR_B4_bear"] <= 1.0 else "❌"}
 
@@ -1088,8 +1108,8 @@ for tab, name in zip(tabs, LS_NAMES):
 - **UR = {r['UR_B4_sl']:.3f}** {"✅" if r["UR_B4_sl"] <= 1.0 else "❌"}
 """)
 
-        with c2:
-            st.markdown(f"""
+                with c2:
+                    st.markdown(f"""
 **Table B.5 — Min vertical (Gk only)**
 
 *Bearing*
@@ -1108,14 +1128,14 @@ for tab, name in zip(tabs, LS_NAMES):
 - **UR = {r['UR_B5_sl']:.3f}** {"✅" if r["UR_B5_sl"] <= 1.0 else "❌"}
 """)
 
-        with c3:
-            st.markdown(f"""
+                with c3:
+                    st.markdown(f"""
 **Table B.6 — Ka driving / Kr passive (WT: {h_wt:.2f} m BGL)**
 
 *Eff. stresses:* σ'top={r['σ_eff_top']:.2f} kPa, σ'bot={r['σ_eff_bot']:.2f} kPa · Uplift Uk={r['U_k']:.2f} kN/m
 
 *Bearing (max V − uplift)*
-- Vu B6 = {r['gG_u']:.2f}×{N_G_k:.2f} + {r['gQ']:.2f}×{Q_vk:.2f} − {r['gG_f']:.2f}×{r['U_k']:.2f} = **{r['V_u_B6']:.2f} kN/m**
+- Vu B6 = {r['gG_u']:.2f}×{N_G_k:.2f} + {r['gQ']:.2f}×{_dc_Qvk:.2f} − {r['gG_f']:.2f}×{r['U_k']:.2f} = **{r['V_u_B6']:.2f} kN/m**
 - q = Vu B6 / Bext = **{r['q_B6']:.2f} kPa** → **UR = {r['UR_B6_bear']:.3f}** {"✅" if r["UR_B6_bear"] <= 1.0 else "❌"}
 
 *Resistance vertical (min V − uplift)*
@@ -1156,7 +1176,8 @@ with st.expander("Geometry & assumptions"):
 | W_fill (cover) | {γ_fill:.1f} × {t_fill:.3f} × {B_ext:.3f} = **{W_fill:.2f} kN/m** |
 | W_soil total | **{W_soil:.2f} kN/m** |
 | N_G,k (permanent) | **{N_G_k:.2f} kN/m** |
-| Q_v,k (LM1 all lanes) | **{Q_vk:.2f} kN/m** |
+| Q_v,k (LM1 all lanes) | **{Q_vk_lm1:.2f} kN/m** |
+| Q_v,k (LM3 {lm3.vehicle_name}) | **{Q_vk_lm3:.2f} kN/m** |
 | σ_v at crown | {γ_road:.1f}×{t_road:.3f} + {γ_sub:.1f}×{t_sub:.3f} + {γ_fill:.1f}×{t_fill:.3f} = **{σ_top:.2f} kPa** |
 | σ_v at invert | {σ_top:.2f} + {γ_fill:.1f}×{H_ext:.3f} = **{σ_bot:.2f} kPa** |
 
